@@ -5,6 +5,10 @@ import { getActiveUsers } from '@/services/users.service';
 import { createLoader, parseAsInteger } from 'nuqs/server';
 import type { SearchParams } from 'nuqs/server';
 
+// Disable caching for this page
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const projectsTableSearchParams = {
   page: parseAsInteger.withDefault(1),
   pageSize: parseAsInteger.withDefault(10),

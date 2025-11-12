@@ -55,6 +55,8 @@ export function CreateAnalysisModal({
       roomAssignments,
       panelMemberIds: selectedMemberIds,
       createdAt: new Date(),
+      isActive: false, // Not active until coordinator activates it
+      testerProgress: [], // Empty initially
     };
 
     // Save analysis to cookie

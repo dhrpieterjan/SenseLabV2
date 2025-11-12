@@ -15,6 +15,15 @@ const RoomAssignmentSchema = z.object({
   monsterCodeMedium: z.string().optional(),
 });
 
+// Validation schema for tester progress
+const TesterProgressSchema = z.object({
+  testerId: z.string().uuid(),
+  completedRoomNumbers: z.array(z.number().min(1).max(8)),
+  currentRoomNumber: z.number().min(1).max(8).optional(),
+  startedAt: z.date().optional(),
+  lastUpdatedAt: z.date().optional(),
+});
+
 // Validation schema for analysis
 const AnalysisSchema = z.object({
   analysisId: z.string().uuid(),
@@ -23,6 +32,9 @@ const AnalysisSchema = z.object({
   roomAssignments: z.array(RoomAssignmentSchema).min(1).max(8),
   panelMemberIds: z.array(z.string().uuid()).min(1).max(6),
   createdAt: z.date(),
+  isActive: z.boolean(),
+  activatedAt: z.date().optional(),
+  testerProgress: z.array(TesterProgressSchema),
 });
 
 export interface ActionResponse<T = void> {
@@ -45,10 +57,14 @@ export async function getAnalyses(): Promise<ActionResponse<AnalysesCookie>> {
 
     const analyses: AnalysesCookie = JSON.parse(analysesCookie.value);
 
-    // Convert date strings back to Date objects
+    // Convert date strings back to Date objects and migrate old analyses
     const parsedAnalyses = analyses.map((analysis) => ({
       ...analysis,
       createdAt: new Date(analysis.createdAt),
+      activatedAt: analysis.activatedAt ? new Date(analysis.activatedAt) : undefined,
+      // Migrate old analyses that don't have the new fields
+      isActive: analysis.isActive ?? false,
+      testerProgress: analysis.testerProgress ?? [],
     }));
 
     return { success: true, data: parsedAnalyses };
@@ -105,8 +121,26 @@ export async function getAnalysisById(analysisId: string): Promise<ActionRespons
  */
 export async function saveAnalysis(analysis: Analysis): Promise<ActionResponse<Analysis>> {
   try {
+    // Ensure dates are Date objects (in case they were serialized as strings)
+    const analysisWithDates = {
+      ...analysis,
+      createdAt: analysis.createdAt instanceof Date ? analysis.createdAt : new Date(analysis.createdAt),
+      activatedAt: analysis.activatedAt
+        ? (analysis.activatedAt instanceof Date ? analysis.activatedAt : new Date(analysis.activatedAt))
+        : undefined,
+      testerProgress: analysis.testerProgress.map(tp => ({
+        ...tp,
+        startedAt: tp.startedAt
+          ? (tp.startedAt instanceof Date ? tp.startedAt : new Date(tp.startedAt))
+          : undefined,
+        lastUpdatedAt: tp.lastUpdatedAt
+          ? (tp.lastUpdatedAt instanceof Date ? tp.lastUpdatedAt : new Date(tp.lastUpdatedAt))
+          : undefined,
+      })),
+    };
+
     // Validate the analysis
-    const validatedAnalysis = AnalysisSchema.parse(analysis);
+    const validatedAnalysis = AnalysisSchema.parse(analysisWithDates);
 
     // Get existing analyses
     const result = await getAnalyses();
@@ -135,7 +169,7 @@ export async function saveAnalysis(analysis: Analysis): Promise<ActionResponse<A
     if (error instanceof z.ZodError) {
       return {
         success: false,
-        error: `Validation error: ${error.errors.map((e) => e.message).join(', ')}`,
+        error: `Validation error: ${error.issues.map((e) => e.message).join(', ')}`,
       };
     }
     console.error('Error saving analysis:', error);
@@ -148,8 +182,26 @@ export async function saveAnalysis(analysis: Analysis): Promise<ActionResponse<A
  */
 export async function updateAnalysis(analysis: Analysis): Promise<ActionResponse<Analysis>> {
   try {
+    // Ensure dates are Date objects (in case they were serialized as strings)
+    const analysisWithDates = {
+      ...analysis,
+      createdAt: analysis.createdAt instanceof Date ? analysis.createdAt : new Date(analysis.createdAt),
+      activatedAt: analysis.activatedAt
+        ? (analysis.activatedAt instanceof Date ? analysis.activatedAt : new Date(analysis.activatedAt))
+        : undefined,
+      testerProgress: analysis.testerProgress.map(tp => ({
+        ...tp,
+        startedAt: tp.startedAt
+          ? (tp.startedAt instanceof Date ? tp.startedAt : new Date(tp.startedAt))
+          : undefined,
+        lastUpdatedAt: tp.lastUpdatedAt
+          ? (tp.lastUpdatedAt instanceof Date ? tp.lastUpdatedAt : new Date(tp.lastUpdatedAt))
+          : undefined,
+      })),
+    };
+
     // Validate the analysis
-    const validatedAnalysis = AnalysisSchema.parse(analysis);
+    const validatedAnalysis = AnalysisSchema.parse(analysisWithDates);
 
     // Get existing analyses
     const result = await getAnalyses();
@@ -178,7 +230,7 @@ export async function updateAnalysis(analysis: Analysis): Promise<ActionResponse
     if (error instanceof z.ZodError) {
       return {
         success: false,
-        error: `Validation error: ${error.errors.map((e) => e.message).join(', ')}`,
+        error: `Validation error: ${error.issues.map((e) => e.message).join(', ')}`,
       };
     }
     console.error('Error updating analysis:', error);
@@ -230,5 +282,180 @@ export async function clearAllAnalyses(): Promise<ActionResponse> {
   } catch (error) {
     console.error('Error clearing analyses:', error);
     return { success: false, error: 'Failed to clear analyses' };
+  }
+}
+
+/**
+ * Get analyses where the current user is a panel member
+ */
+export async function getAnalysesForTester(
+  testerId: string
+): Promise<ActionResponse<AnalysesCookie>> {
+  try {
+    const result = await getAnalyses();
+    if (!result.success || !result.data) {
+      return result;
+    }
+
+    const testerAnalyses = result.data.filter((a) => a.panelMemberIds.includes(testerId));
+    return { success: true, data: testerAnalyses };
+  } catch (error) {
+    console.error('Error getting analyses for tester:', error);
+    return { success: false, error: 'Failed to retrieve tester analyses' };
+  }
+}
+
+/**
+ * Activate an analysis (sets isActive to true and records activation time)
+ */
+export async function activateAnalysis(analysisId: string): Promise<ActionResponse<Analysis>> {
+  try {
+    const result = await getAnalysisById(analysisId);
+    if (!result.success || !result.data) {
+      return { success: false, error: 'Analysis not found' };
+    }
+
+    const analysis = result.data;
+    analysis.isActive = true;
+    analysis.activatedAt = new Date();
+
+    return await updateAnalysis(analysis);
+  } catch (error) {
+    console.error('Error activating analysis:', error);
+    return { success: false, error: 'Failed to activate analysis' };
+  }
+}
+
+/**
+ * Start testing for a tester (assigns first room or continues from last room)
+ */
+export async function startTesting(
+  analysisId: string,
+  testerId: string
+): Promise<ActionResponse<{ analysis: Analysis; assignedRoomNumber: number }>> {
+  try {
+    const result = await getAnalysisById(analysisId);
+    if (!result.success || !result.data) {
+      return { success: false, error: 'Analysis not found' };
+    }
+
+    const analysis = result.data;
+
+    // Check if tester is assigned to this analysis
+    if (!analysis.panelMemberIds.includes(testerId)) {
+      return { success: false, error: 'Tester not assigned to this analysis' };
+    }
+
+    // Find or create tester progress
+    let testerProgress = analysis.testerProgress.find((tp) => tp.testerId === testerId);
+
+    if (!testerProgress) {
+      // First time - assign random room
+      const availableRooms = analysis.roomAssignments.map((ra) => ra.roomNumber);
+      const randomIndex = Math.floor(Math.random() * availableRooms.length);
+      const assignedRoom = availableRooms[randomIndex];
+
+      testerProgress = {
+        testerId,
+        completedRoomNumbers: [],
+        currentRoomNumber: assignedRoom,
+        startedAt: new Date(),
+        lastUpdatedAt: new Date(),
+      };
+      analysis.testerProgress.push(testerProgress);
+    } else {
+      // Continuing - update timestamp
+      testerProgress.lastUpdatedAt = new Date();
+    }
+
+    // Save updated analysis
+    const updateResult = await updateAnalysis(analysis);
+    if (!updateResult.success) {
+      console.error('Failed to save progress in startTesting:', updateResult.error);
+      return { success: false, error: updateResult.error || 'Failed to save progress' };
+    }
+
+    return {
+      success: true,
+      data: {
+        analysis: updateResult.data!,
+        assignedRoomNumber: testerProgress.currentRoomNumber!,
+      },
+    };
+  } catch (error) {
+    console.error('Error starting testing:', error);
+    return { success: false, error: 'Failed to start testing' };
+  }
+}
+
+/**
+ * Complete a room and assign the next one
+ */
+export async function completeRoom(
+  analysisId: string,
+  testerId: string,
+  roomNumber: number
+): Promise<ActionResponse<{ analysis: Analysis; nextRoomNumber?: number; isComplete: boolean }>> {
+  try {
+    const result = await getAnalysisById(analysisId);
+    if (!result.success || !result.data) {
+      return { success: false, error: 'Analysis not found' };
+    }
+
+    const analysis = result.data;
+
+    // Find tester progress
+    const testerProgress = analysis.testerProgress.find((tp) => tp.testerId === testerId);
+    if (!testerProgress) {
+      return { success: false, error: 'Tester progress not found' };
+    }
+
+    // Mark current room as completed
+    if (!testerProgress.completedRoomNumbers.includes(roomNumber)) {
+      testerProgress.completedRoomNumbers.push(roomNumber);
+    }
+
+    // Check if all rooms are done
+    const totalRooms = analysis.roomAssignments.length;
+    const isComplete = testerProgress.completedRoomNumbers.length >= totalRooms;
+
+    let nextRoomNumber: number | undefined;
+
+    if (!isComplete) {
+      // Find next room that hasn't been completed
+      const remainingRooms = analysis.roomAssignments
+        .map((ra) => ra.roomNumber)
+        .filter((rn) => !testerProgress.completedRoomNumbers.includes(rn));
+
+      if (remainingRooms.length > 0) {
+        // Assign random room from remaining rooms
+        const randomIndex = Math.floor(Math.random() * remainingRooms.length);
+        nextRoomNumber = remainingRooms[randomIndex];
+        testerProgress.currentRoomNumber = nextRoomNumber;
+      }
+    } else {
+      // All done
+      testerProgress.currentRoomNumber = undefined;
+    }
+
+    testerProgress.lastUpdatedAt = new Date();
+
+    // Save updated analysis
+    const updateResult = await updateAnalysis(analysis);
+    if (!updateResult.success) {
+      return { success: false, error: 'Failed to save progress' };
+    }
+
+    return {
+      success: true,
+      data: {
+        analysis: updateResult.data!,
+        nextRoomNumber,
+        isComplete,
+      },
+    };
+  } catch (error) {
+    console.error('Error completing room:', error);
+    return { success: false, error: 'Failed to complete room' };
   }
 }

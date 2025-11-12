@@ -12,6 +12,10 @@ import { createLoader, parseAsString } from 'nuqs/server';
 import type { SearchParams } from 'nuqs/server';
 import type { PanelMemberInfo } from '@/lib/analysis-types';
 
+// Disable caching for this page
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const monstersTableSearchParams = {
   date: parseAsString.withDefault(''),
 };
